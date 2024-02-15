@@ -111,12 +111,7 @@ async fn main() -> io::Result<()> {
 
     let ipv4_only = matches.get_flag("ipv4_only");
 
-    let remote_addr = tokio::net::lookup_host(matches.get_one::<String>("remote").unwrap())
-        .await
-        .expect("bad remote address or host")
-        .find(|addr| !ipv4_only || addr.is_ipv4())
-        .expect("unable to resolve remote host name");
-    info!("Remote address is: {}", remote_addr);
+    let remote_host = matches.get_one::<String>("remote").unwrap().to_owned();
 
     let tun_local: Ipv4Addr = matches
         .get_one::<String>("tun_local")
@@ -161,11 +156,8 @@ async fn main() -> io::Result<()> {
         .try_build_mq(num_cpus)
         .unwrap();
 
-    if remote_addr.is_ipv6() {
-        assign_ipv6_address(tun[0].name(), tun_local6.unwrap(), tun_peer6.unwrap());
-    }
-
-    info!("Created TUN device {}", tun[0].name());
+    let tun_name = tun[0].name().to_owned();
+    info!("Created TUN device {}", tun_name);
 
     let udp_sock = Arc::new(new_udp_reuseport(local_addr));
     let connections = Arc::new(RwLock::new(HashMap::<SocketAddr, Arc<Socket>>::new()));
@@ -173,6 +165,7 @@ async fn main() -> io::Result<()> {
     let mut stack = Stack::new(tun, tun_peer, tun_peer6);
 
     let main_loop = tokio::spawn(async move {
+        let mut tun_ipv6_assgined = false;
         let mut buf_r = [0u8; MAX_PACKET_LEN];
 
         loop {
@@ -187,6 +180,24 @@ async fn main() -> io::Result<()> {
             }
 
             info!("New UDP client from {}", addr);
+
+            let Ok(mut remote_addr) = tokio::net::lookup_host(&remote_host).await else {
+                error!("bad remote address or host");
+                continue;
+            };
+
+            let Some(remote_addr) = remote_addr.find(|addr| !ipv4_only || addr.is_ipv4()) else {
+                error!("unable to resolve remote host name");
+                continue;
+            };
+
+            info!("Remote address is: {}", remote_addr);
+
+            if !tun_ipv6_assgined && remote_addr.is_ipv6() {
+                assign_ipv6_address(&tun_name, tun_local6.unwrap(), tun_peer6.unwrap());
+                tun_ipv6_assgined = true;
+            }
+
             let sock = stack.connect(remote_addr).await;
             if sock.is_none() {
                 error!("Unable to connect to remote {}", remote_addr);
