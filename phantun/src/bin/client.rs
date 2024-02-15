@@ -240,8 +240,6 @@ async fn main() -> io::Result<()> {
                                     quit.cancel();
                                     return;
                                 }
-
-                                packet_received.notify_one();
                             },
                             res = sock.recv(&mut buf_tcp) => {
                                 match res {
